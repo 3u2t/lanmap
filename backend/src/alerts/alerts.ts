@@ -1,4 +1,5 @@
 import { getDb } from "../db/db.js";
+import { notifyAlert } from "../notify/notify.js";
 import type { AlertType } from "@lanmap/shared";
 
 const WINDOW_MS = 15 * 60_000;
@@ -18,7 +19,9 @@ export function raiseAlert(opts: {
   const r = db
     .prepare("INSERT INTO alerts (type, device_id, message, severity, created_at) VALUES (?, ?, ?, ?, ?)")
     .run(opts.type, opts.deviceId ?? null, opts.message, opts.severity ?? "info", Date.now());
-  return { id: Number(r.lastInsertRowid), deduped: false };
+  const id = Number(r.lastInsertRowid);
+  void notifyAlert({ type: opts.type, message: opts.message, severity: opts.severity ?? "info" });
+  return { id, deduped: false };
 }
 
 export function listAlerts(limit = 100, onlyOpen = false): unknown[] {

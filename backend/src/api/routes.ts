@@ -3,6 +3,8 @@ import { getDb, getSetting, setSetting } from "../db/db.js";
 import { detectSubnets, getGatewayIp, getInterfaces } from "../network/interfaces.js";
 import { dnsTest } from "../network/ping.js";
 import { getScanState, startScan, stopScan } from "../discovery/scanner.js";
+import { getTopology, refreshTopology } from "../network/topologyStore.js";
+import { getVapidKeys, pushSubscriptionCount, readNtfy, readWebPush, sendNtfy, sendWebPush } from "../notify/notify.js";
 import { ackAlert, listAlerts, networkHealth, raiseAlert } from "../alerts/alerts.js";
 import {
   createSession,
@@ -20,12 +22,23 @@ import {
   DEFAULT_SETTINGS,
   clampInt,
   isPrivateCidr,
+  subnetOf,
   type Device,
 } from "@lanmap/shared";
 
 export const router = Router();
 
 function rowToDevice(r: Record<string, unknown>): Device {
+  let openPorts: number[] | null = null;
+  try {
+    const raw = r.open_ports as string | null;
+    if (raw) {
+      const p = JSON.parse(raw) as unknown;
+      if (Array.isArray(p)) openPorts = p.filter((v): v is number => typeof v === "number");
+    }
+  } catch {
+    openPorts = null;
+  }
   return {
     id: String(r.id),
     ip: String(r.ip),
@@ -44,6 +57,10 @@ function rowToDevice(r: Record<string, unknown>): Device {
     consecutiveFailures: Number(r.consecutive_failures) ?? 0,
     firstSeen: Number(r.first_seen),
     lastSeen: Number(r.last_seen),
+    source: (r.source as string) ?? null,
+    openPorts,
+    hops: (r.hops as number) ?? null,
+    l2: r.l2 === null || r.l2 === undefined ? null : Number(r.l2) === 1,
   };
 }
 
@@ -120,6 +137,9 @@ router.use("/api/alerts", requireAuth);
 router.use("/api/settings", requireAuth);
 router.use("/api/export", requireAuth);
 router.use("/api/agent", requireAuth);
+router.use("/api/topology", requireAuth);
+router.use("/api/notify", requireAuth);
+router.use("/api/push", requireAuth);
 
 router.get("/api/devices", (req, res) => {
   const { search = "", status = "", monitored = "" } = req.query as Record<string, string>;
@@ -216,6 +236,17 @@ function effectiveGatewayIp(): string | null {
   return getGatewayIp();
 }
 function effectiveSubnets(): string[] {
+  try {
+    const raw = getSetting("subnets", "");
+    if (raw) {
+      const list = JSON.parse(raw) as unknown;
+      if (Array.isArray(list)) {
+        const clean = list.filter((s): s is string => typeof s === "string" && isPrivateCidr(s));
+        if (clean.length > 0) return clean.slice(0, 8);
+      }
+    }
+  } catch {
+  }
   const s = getSetting("subnet", "");
   if (s) return [s];
   return detectSubnets();
@@ -239,28 +270,34 @@ router.get("/api/discovery", (_req, res) => {
 });
 
 router.post("/api/scan/start", async (req, res) => {
-  let { target } = req.body ?? {};
-  if (typeof target !== "string" || !target) {
-    const subs = effectiveSubnets();
-    target = subs[0];
-    if (!target) {
-      res.status(400).json({ error: "No local subnet detected. Enter one like 192.168.1.0/24." });
+  const body = req.body ?? {};
+  let targets: string[];
+  if (Array.isArray(body.targets)) targets = body.targets.filter((t: unknown) => typeof t === "string" && t);
+  else if (typeof body.target === "string" && body.target) targets = [body.target];
+  else targets = effectiveSubnets();
+  if (targets.length === 0) {
+    res.status(400).json({ error: "No local subnet detected. Enter one like 192.168.1.0/24." });
+    return;
+  }
+  targets = [...new Set(targets)].slice(0, 8);
+  for (const t of targets) {
+    if (!isPrivateCidr(t)) {
+      res.status(400).json({ error: `Only local/private ranges allowed: ${t} (e.g. 192.168.1.0/24).` });
       return;
     }
   }
-  if (!isPrivateCidr(target)) {
-    res.status(400).json({ error: "Only local/private ranges allowed (e.g. 192.168.1.0/24)." });
-    return;
-  }
   try {
-    broadcast({ type: "scan-progress", payload: { state: "running", target } });
-    void startScan(target, {
+    broadcast({ type: "scan-progress", payload: { state: "running", target: targets.join(", ") } });
+    void startScan(targets, {
       onProgress: (p) => broadcast({ type: "scan-progress", payload: p }),
     }).then(
-      () => broadcast({ type: "scan-progress", payload: getScanState() }),
+      () => {
+        broadcast({ type: "scan-progress", payload: getScanState() });
+        void refreshTopology().catch(() => null);
+      },
       (e: Error) => broadcast({ type: "scan-progress", payload: { state: "error", error: e.message } }),
     );
-    res.json({ ok: true, target, scan: getScanState() });
+    res.json({ ok: true, target: targets.join(", "), targets, scan: getScanState() });
   } catch (e) {
     res.status(400).json({ error: (e as Error).message });
   }
@@ -299,6 +336,64 @@ router.post("/api/alerts/:id/ack", (req, res) => {
   res.json({ ok: true });
 });
 
+function readSubnetsSetting(): string[] {
+  try {
+    const raw = getSetting("subnets", "");
+    if (!raw) return [];
+    const list = JSON.parse(raw) as unknown;
+    if (!Array.isArray(list)) return [];
+    return list.filter((s): s is string => typeof s === "string" && isPrivateCidr(s)).slice(0, 8);
+  } catch {
+    return [];
+  }
+}
+
+function readMethodsSetting(): { arp: boolean; ping: boolean; mdns: boolean; ssdp: boolean; tcp: boolean } {
+  const fb = { arp: true, ping: true, mdns: true, ssdp: true, tcp: true };
+  try {
+    const raw = getSetting("methods", "");
+    if (!raw) return fb;
+    const j = JSON.parse(raw) as Partial<typeof fb>;
+    return {
+      arp: j.arp !== false,
+      ping: j.ping !== false,
+      mdns: j.mdns !== false,
+      ssdp: j.ssdp !== false,
+      tcp: j.tcp !== false,
+    };
+  } catch {
+    return fb;
+  }
+}
+
+function readNotifySettings() {
+  let ntfy = { enabled: false, server: "https://ntfy.sh", topic: "", minSeverity: "warning" as const };
+  let webpush = { enabled: false, minSeverity: "warning" as const };
+  try {
+    const j = JSON.parse(getSetting("ntfy", "{}")) as Partial<typeof ntfy>;
+    ntfy = {
+      enabled: j.enabled === true,
+      server: typeof j.server === "string" && j.server ? j.server : "https://ntfy.sh",
+      topic: typeof j.topic === "string" ? j.topic : "",
+      minSeverity: ["info", "warning", "critical"].includes(j.minSeverity as string)
+        ? (j.minSeverity as typeof ntfy.minSeverity)
+        : "warning",
+    };
+  } catch {
+  }
+  try {
+    const j = JSON.parse(getSetting("webpush", "{}")) as Partial<typeof webpush>;
+    webpush = {
+      enabled: j.enabled === true,
+      minSeverity: ["info", "warning", "critical"].includes(j.minSeverity as string)
+        ? (j.minSeverity as typeof webpush.minSeverity)
+        : "warning",
+    };
+  } catch {
+  }
+  return { ntfy, webpush };
+}
+
 function currentSettings() {
   return {
     monitoring: {
@@ -310,9 +405,10 @@ function currentSettings() {
     },
     discovery: {
       subnet: getSetting("subnet", "") || null,
+      subnets: readSubnetsSetting(),
       gatewayIp: getSetting("gatewayIp", "") || null,
       scanIntervalMs: clampInt(Number(getSetting("scanIntervalMs", "300000")), 60000, 3600000, 300000),
-      methods: { arp: true, ping: true, mdns: true },
+      methods: readMethodsSetting(),
     },
     alerts: {
       newDevice: getSetting("alertNew", "1") === "1",
@@ -321,6 +417,7 @@ function currentSettings() {
       highLatency: getSetting("alertLatency", "1") === "1",
       packetLoss: getSetting("alertLoss", "1") === "1",
     },
+    notifications: readNotifySettings(),
     appearance: { theme: (getSetting("theme", "dark") as "dark" | "light" | "system") ?? "dark" },
     retentionDays: clampInt(Number(getSetting("retentionDays", "30")), 1, 365, 30),
   };
@@ -356,6 +453,73 @@ router.put("/api/settings", (req, res) => {
         return;
       }
       setSetting("gatewayIp", b.discovery.gatewayIp ?? "");
+    }
+    if (b.discovery?.subnets !== undefined) {
+      if (!Array.isArray(b.discovery.subnets) || b.discovery.subnets.length > 8) {
+        res.status(400).json({ error: "subnets must be an array of up to 8 ranges." });
+        return;
+      }
+      for (const s of b.discovery.subnets) {
+        if (typeof s !== "string" || !isPrivateCidr(s)) {
+          res.status(400).json({ error: `Not a private range: ${String(s)}` });
+          return;
+        }
+      }
+      setSetting("subnets", JSON.stringify(b.discovery.subnets));
+    }
+    if (b.discovery?.methods !== undefined) {
+      const m = b.discovery.methods;
+      const cur = readMethodsSetting();
+      const merged = {
+        arp: m.arp === undefined ? cur.arp : m.arp === true,
+        ping: m.ping === undefined ? cur.ping : m.ping === true,
+        mdns: m.mdns === undefined ? cur.mdns : m.mdns === true,
+        ssdp: m.ssdp === undefined ? cur.ssdp : m.ssdp === true,
+        tcp: m.tcp === undefined ? cur.tcp : m.tcp === true,
+      };
+      if (!merged.arp && !merged.ping && !merged.mdns && !merged.ssdp && !merged.tcp) {
+        res.status(400).json({ error: "At least one discovery method must stay enabled." });
+        return;
+      }
+      setSetting("methods", JSON.stringify(merged));
+    }
+    if (b.notifications?.ntfy !== undefined) {
+      const n = b.notifications.ntfy;
+      const cur = readNotifySettings().ntfy;
+      const server = n.server === undefined ? cur.server : String(n.server || "").replace(/\/+$/, "");
+      if (server && !/^https?:\/\/[a-zA-Z0-9.-]+(?::\d+)?$/.test(server)) {
+        res.status(400).json({ error: "ntfy server must be an http(s) URL." });
+        return;
+      }
+      const topic = n.topic === undefined ? cur.topic : String(n.topic || "");
+      if (topic && !/^[a-zA-Z0-9_-]{1,64}$/.test(topic)) {
+        res.status(400).json({ error: "ntfy topic must be 1-64 chars: letters, numbers, _ -." });
+        return;
+      }
+      const minSeverity = n.minSeverity === undefined ? cur.minSeverity : n.minSeverity;
+      if (!["info", "warning", "critical"].includes(minSeverity)) {
+        res.status(400).json({ error: "Bad minSeverity." });
+        return;
+      }
+      setSetting("ntfy", JSON.stringify({
+        enabled: n.enabled === undefined ? cur.enabled : n.enabled === true,
+        server: server || "https://ntfy.sh",
+        topic,
+        minSeverity,
+      }));
+    }
+    if (b.notifications?.webpush !== undefined) {
+      const w = b.notifications.webpush;
+      const cur = readNotifySettings().webpush;
+      const minSeverity = w.minSeverity === undefined ? cur.minSeverity : w.minSeverity;
+      if (!["info", "warning", "critical"].includes(minSeverity)) {
+        res.status(400).json({ error: "Bad minSeverity." });
+        return;
+      }
+      setSetting("webpush", JSON.stringify({
+        enabled: w.enabled === undefined ? cur.enabled : w.enabled === true,
+        minSeverity,
+      }));
     }
     if (b.retentionDays !== undefined) setSetting("retentionDays", String(clampInt(b.retentionDays, 1, 365, 30)));
     if (b.appearance?.theme !== undefined) {
@@ -410,6 +574,79 @@ router.post("/api/_test/alert", (req, res) => {
   }
   const a = raiseAlert({ type: "new-device", message: String(req.body?.message ?? "test"), severity: "info" });
   res.json(a);
+});
+
+router.get("/api/topology", (_req, res) => {
+  const topo = getTopology();
+  const subs = effectiveSubnets();
+  res.json({
+    ...topo,
+    subnets: subs,
+    nodes: topo.nodes.map((n) => ({ ...n, subnet: subnetOf(n.ip, subs) })),
+  });
+});
+
+router.post("/api/topology/refresh", async (_req, res) => {
+  const r = await refreshTopology({ force: true }).catch((e: Error) => ({ error: e.message }));
+  res.json(r);
+});
+
+router.get("/api/notify/status", (_req, res) => {
+  const ntfy = readNtfy();
+  const webpush = readWebPush();
+  res.json({
+    ntfy: { enabled: ntfy.enabled, server: ntfy.server, topic: ntfy.topic, minSeverity: ntfy.minSeverity },
+    webpush: { enabled: webpush.enabled, minSeverity: webpush.minSeverity, subscriptions: pushSubscriptionCount() },
+  });
+});
+
+router.post("/api/notify/test", async (req, res) => {
+  const channel = (req.body as { channel?: string } | undefined)?.channel;
+  try {
+    if (channel === "ntfy") {
+      const cfg = readNtfy();
+      await sendNtfy(cfg, "LANMap", "Test notification from LANMap.", "info");
+      res.json({ ok: true, channel });
+      return;
+    }
+    if (channel === "webpush") {
+      const r = await sendWebPush("LANMap", "Test notification from LANMap.", "info");
+      res.json({ ok: true, channel, ...r });
+      return;
+    }
+    res.status(400).json({ error: "channel must be ntfy or webpush." });
+  } catch (e) {
+    res.status(400).json({ error: (e as Error).message });
+  }
+});
+
+router.get("/api/push/vapid", (_req, res) => {
+  res.json({ publicKey: getVapidKeys().publicKey });
+});
+
+router.post("/api/push/subscribe", (req, res) => {
+  const { endpoint, keys } = (req.body ?? {}) as { endpoint?: unknown; keys?: unknown };
+  if (typeof endpoint !== "string" || !endpoint.startsWith("https://") || endpoint.length > 2000) {
+    res.status(400).json({ error: "Invalid endpoint." });
+    return;
+  }
+  const k = keys as { p256dh?: unknown; auth?: unknown } | undefined;
+  if (!k || typeof k.p256dh !== "string" || typeof k.auth !== "string" || !k.p256dh || !k.auth) {
+    res.status(400).json({ error: "Invalid keys." });
+    return;
+  }
+  getDb()
+    .prepare("INSERT INTO push_subscriptions (endpoint, keys, created_at) VALUES (?, ?, ?) ON CONFLICT(endpoint) DO UPDATE SET keys = excluded.keys")
+    .run(endpoint, JSON.stringify({ p256dh: k.p256dh, auth: k.auth }), Date.now());
+  res.json({ ok: true });
+});
+
+router.delete("/api/push/unsubscribe", (req, res) => {
+  const { endpoint } = (req.body ?? {}) as { endpoint?: unknown };
+  if (typeof endpoint === "string" && endpoint) {
+    getDb().prepare("DELETE FROM push_subscriptions WHERE endpoint = ?").run(endpoint);
+  }
+  res.json({ ok: true });
 });
 
 export { networkHealth };

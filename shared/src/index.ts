@@ -35,6 +35,10 @@ export interface Device {
   consecutiveFailures: number;
   firstSeen: number;
   lastSeen: number;
+  source?: string | null;
+  openPorts?: number[] | null;
+  hops?: number | null;
+  l2?: boolean | null;
 }
 
 export interface InterfaceInfo {
@@ -91,6 +95,33 @@ export interface WsMessage {
   at: number;
 }
 
+export type NotifySeverity = "info" | "warning" | "critical";
+
+export interface NtfySettings {
+  enabled: boolean;
+  server: string;
+  topic: string;
+  minSeverity: NotifySeverity;
+}
+
+export interface WebPushSettings {
+  enabled: boolean;
+  minSeverity: NotifySeverity;
+}
+
+export interface NotificationSettings {
+  ntfy: NtfySettings;
+  webpush: WebPushSettings;
+}
+
+export interface DiscoveryMethods {
+  arp: boolean;
+  ping: boolean;
+  mdns: boolean;
+  ssdp: boolean;
+  tcp: boolean;
+}
+
 export interface AppSettings {
   monitoring: {
     intervalMs: number;
@@ -101,9 +132,10 @@ export interface AppSettings {
   };
   discovery: {
     subnet: string | null;
+    subnets: string[];
     gatewayIp: string | null;
     scanIntervalMs: number;
-    methods: { arp: boolean; ping: boolean; mdns: boolean };
+    methods: DiscoveryMethods;
   };
   alerts: {
     newDevice: boolean;
@@ -112,8 +144,24 @@ export interface AppSettings {
     highLatency: boolean;
     packetLoss: boolean;
   };
+  notifications: NotificationSettings;
   appearance: { theme: "dark" | "light" | "system" };
   retentionDays: number;
+}
+
+export interface TopoNode {
+  id: string;
+  ip: string;
+  hops: number | null;
+  l2: boolean | null;
+  iface: string | null;
+  subnet: string | null;
+}
+
+export interface Topology {
+  gateway: string | null;
+  generatedAt: number | null;
+  nodes: TopoNode[];
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -126,9 +174,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
   },
   discovery: {
     subnet: null,
+    subnets: [],
     gatewayIp: null,
     scanIntervalMs: 5 * 60_000,
-    methods: { arp: true, ping: true, mdns: true },
+    methods: { arp: true, ping: true, mdns: true, ssdp: true, tcp: true },
   },
   alerts: {
     newDevice: true,
@@ -136,6 +185,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
     onlineAgain: true,
     highLatency: true,
     packetLoss: true,
+  },
+  notifications: {
+    ntfy: { enabled: false, server: "https://ntfy.sh", topic: "", minSeverity: "warning" },
+    webpush: { enabled: false, minSeverity: "warning" },
   },
   appearance: { theme: "dark" },
   retentionDays: 30,
@@ -343,6 +396,29 @@ export function displayName(d: {
   ip: string;
 }): string {
   return d.customName || d.hostname || d.ip;
+}
+
+export function severityRank(s: string): number {
+  if (s === "critical") return 3;
+  if (s === "warning") return 2;
+  return 1;
+}
+
+export function passesSeverity(severity: string, min: NotifySeverity): boolean {
+  return severityRank(severity) >= severityRank(min);
+}
+
+export function subnetOf(ip: string, subnets: string[]): string | null {
+  const n = parseIpv4(ip);
+  if (n === null) return null;
+  for (const cidr of subnets) {
+    const p = parseCidr(cidr);
+    if (!p) continue;
+    const mask = p.prefix === 0 ? 0 : (0xffffffff << (32 - p.prefix)) >>> 0;
+    const net = (parseIpv4(p.network) ?? 0) & mask;
+    if (((n & mask) >>> 0) === (net >>> 0)) return `${p.network}/${p.prefix}`;
+  }
+  return null;
 }
 
 export function timeAgo(at: number, now = Date.now()): string {

@@ -17,7 +17,16 @@ Base: same origin. Auth via `lanmap_session` cookie (first-run setup first). Err
 | GET | /api/network | — | gateway, internet, interfaces, subnets, health |
 | GET | /api/interfaces | — | interfaces, subnets, gateway |
 | GET | /api/discovery | — | subnets, gateway, scan |
-| POST | /api/scan/start | {target?} private CIDR | starts job |
+| POST | /api/scan/start | {target?} or {targets[]} private CIDRs (max 8) | starts job over all subnets |
+| POST | /api/scan/stop | — | stops job |
+| GET | /api/scan | — | scan state |
+| GET | /api/topology | — | gateway, generatedAt, nodes {id, ip, hops, l2, iface, subnet} |
+| POST | /api/topology/refresh | — | re-measures hops/L2 (throttled) |
+| GET | /api/notify/status | — | ntfy + webpush config state, subscription count |
+| POST | /api/notify/test | {channel: ntfy\|webpush} | sends test push |
+| GET | /api/push/vapid | — | VAPID public key (generated on first use) |
+| POST | /api/push/subscribe | {endpoint, keys:{p256dh, auth}} | registers browser |
+| DELETE | /api/push/unsubscribe | {endpoint?} | removes browser |
 | POST | /api/scan/stop | — | stops job |
 | GET | /api/scan | — | scan state |
 | GET | /api/history/summary | ?range=24h\|7d | devices, disconnects, recent |

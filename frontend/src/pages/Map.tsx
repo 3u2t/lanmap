@@ -3,8 +3,9 @@ import { Link } from "react-router-dom";
 import type { Device } from "@lanmap/shared";
 import { displayName } from "@lanmap/shared";
 import { Empty } from "../components/bits";
+import { api } from "../lib/api";
 
-type GroupBy = "subnet" | "category";
+type GroupBy = "subnet" | "interface" | "category";
 type StatusFilter = "all" | "online" | "offline" | "unknown";
 
 const CAT_ICON: Record<string, string> = {
@@ -24,6 +25,18 @@ function iconFor(d: Device) {
   return "◻";
 }
 
+function hopLabel(d: Device): string | null {
+  if (d.hops === 1 || d.l2 === true) return "L2";
+  if (typeof d.hops === "number" && d.hops > 1) return `${d.hops} Hops`;
+  return null;
+}
+
+function linkStyle(d: Device): { dash: string; opacity: number } {
+  if (d.l2 === true || d.hops === 1) return { dash: "", opacity: 0.9 };
+  if (typeof d.hops === "number" && d.hops > 1) return { dash: "4 3", opacity: 0.75 };
+  return { dash: "1 4", opacity: 0.4 };
+}
+
 export function Map({ devices }: { devices: Device[] }) {
   const [q, setQ] = useState("");
   const [zoom, setZoom] = useState(1);
@@ -34,6 +47,15 @@ export function Map({ devices }: { devices: Device[] }) {
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const dragging = useRef(false);
   const last = useRef({ x: 0, y: 0 });
+  const [subnetByIp, setSubnetByIp] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    api.topology().then((t) => {
+      const m: Record<string, string> = {};
+      for (const n of t.nodes) if (n.subnet) m[n.ip] = n.subnet;
+      setSubnetByIp(m);
+    }).catch(() => {});
+  }, []);
 
   const needle = q.trim().toLowerCase();
 
@@ -48,18 +70,17 @@ export function Map({ devices }: { devices: Device[] }) {
   const groups = useMemo(() => {
     const m = new globalThis.Map<string, Device[]>();
     for (const d of filtered) {
-      const key =
-        groupBy === "category"
-          ? (d.category ?? "Other") || "Other"
-          : d.ip.includes(":")
-            ? "IPv6"
-            : d.ip.split(".").slice(0, 3).join(".") + ".0/24";
+      let key: string;
+      if (groupBy === "category") key = (d.category ?? "Other") || "Other";
+      else if (groupBy === "interface") key = d.iface || "unknown interface";
+      else if (subnetByIp[d.ip]) key = subnetByIp[d.ip];
+      else key = d.ip.includes(":") ? "IPv6" : d.ip.split(".").slice(0, 3).join(".") + ".0/24";
       if (!m.has(key)) m.set(key, []);
       m.get(key)!.push(d);
     }
     for (const [, list] of m) list.sort((a, b) => a.ip.localeCompare(b.ip, undefined, { numeric: true }));
     return m;
-  }, [filtered, groupBy]);
+  }, [filtered, groupBy, subnetByIp]);
 
   const online = filtered.filter((d) => d.status === "online").length;
   const isSingleSubnet = groups.size === 1;
@@ -132,6 +153,7 @@ export function Map({ devices }: { devices: Device[] }) {
         </div>
         <select value={groupBy} onChange={(e) => setGroupBy(e.target.value as GroupBy)} aria-label="Gruppierung">
           <option value="subnet">Nach Subnetz</option>
+          <option value="interface">Nach Interface</option>
           <option value="category">Nach Kategorie</option>
         </select>
         <div className="row" style={{ margin: 0, gap: 4 }}>
@@ -166,9 +188,22 @@ export function Map({ devices }: { devices: Device[] }) {
               <div className="radial-wrap">
                 <svg className="radial-svg" viewBox="0 0 800 600" width={800} height={560} aria-hidden>
                   <circle cx={400} cy={90} r={28} fill="var(--ok-bg)" opacity={0.6} />
-                  {radial.map(({ x, y, gwY, cx }) => (
-                    <line key={x + "-" + y} x1={cx} y1={gwY + 18} x2={x} y2={y} stroke="var(--border-2)" strokeWidth={1.2} opacity={0.9} />
-                  ))}
+                  {radial.map(({ d, x, y, gwY, cx }) => {
+                    const ls = linkStyle(d);
+                    return (
+                      <line
+                        key={x + "-" + y}
+                        x1={cx}
+                        y1={gwY + 18}
+                        x2={x}
+                        y2={y}
+                        stroke="var(--border-2)"
+                        strokeWidth={d.l2 === true ? 1.6 : 1.2}
+                        strokeDasharray={ls.dash || undefined}
+                        opacity={ls.opacity}
+                      />
+                    );
+                  })}
                   <circle cx={400} cy={300} r={Math.min(260, Math.max(160, filtered.length * 11))} fill="none" stroke="var(--border)" strokeDasharray="4 6" opacity={0.5} />
                 </svg>
                 <div className="radial-gw" style={{ left: 400, top: 90 }}>
@@ -191,6 +226,11 @@ export function Map({ devices }: { devices: Device[] }) {
                       <span className="rn-name">{displayName(d)}</span>
                       <span className="rn-ip mono">{d.ip}</span>
                       {d.latencyMs != null && <span className="rn-lat">{Math.round(d.latencyMs)} ms</span>}
+                      {hopLabel(d) && (
+                        <span className="rn-lat" title={d.l2 === true ? "Direkt im lokalen Netz (Layer 2)" : `Erreichbar über ${d.hops} Hops`}>
+                          {hopLabel(d)}
+                        </span>
+                      )}
                     </Link>
                   );
                 })}
@@ -203,7 +243,7 @@ export function Map({ devices }: { devices: Device[] }) {
                     <div key={key} className="subnet">
                       <div className="subnet-head">
                         <strong>
-                          <span style={{ marginRight: 6 }}>{groupBy === "category" ? (CAT_ICON[key] ?? "◻") : "▦"}</span>
+                          <span style={{ marginRight: 6 }}>{groupBy === "category" ? (CAT_ICON[key] ?? "◻") : groupBy === "interface" ? "⧉" : "▦"}</span>
                           {key}
                         </strong>
                         <span className="count">
@@ -219,7 +259,7 @@ export function Map({ devices }: { devices: Device[] }) {
                               <span className={`dot ${dot}`} title={d.status} />
                               <span className="meta">
                                 <span className="name">{displayName(d)}</span>
-                                <span className="ip">{d.ip} {d.vendor ? `· ${d.vendor}` : ""}</span>
+                                <span className="ip">{d.ip} {d.vendor ? `· ${d.vendor}` : ""}{d.source && d.source !== "ping" && d.source !== "arp" ? ` · via ${d.source}` : ""}{typeof d.hops === "number" ? ` · ${d.hops === 1 ? "L2" : `${d.hops} Hops`}` : ""}</span>
                               </span>
                               <span className="lat">
                                 {d.latencyMs != null ? (
@@ -245,7 +285,7 @@ export function Map({ devices }: { devices: Device[] }) {
               <span><i className="dot offline small" /> offline</span>
               <span className="dim">Klick → Details · Hover highlight · Drag & Zoom</span>
               <span style={{ marginLeft: "auto" }} className="dim">
-                {groupBy === "subnet" ? "Gruppiert nach Subnetz" : "Gruppiert nach Kategorie"} · {filtered.length} sichtbar
+                {groupBy === "subnet" ? "Gruppiert nach Subnetz" : groupBy === "interface" ? "Gruppiert nach Interface" : "Gruppiert nach Kategorie"} · {filtered.length} sichtbar · Linie solid = direkt (L2), gestrichelt = geroutet
               </span>
             </div>
           </div>

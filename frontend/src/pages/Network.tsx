@@ -6,9 +6,25 @@ export function Network() {
   const [net, setNet] = useState<Awaited<ReturnType<typeof api.network>> | null>(null);
   const [host, setHost] = useState("example.com");
   const [dns, setDns] = useState<{ ok: boolean; ms: number; addresses: string[] } | null>(null);
+  const [topo, setTopo] = useState<Awaited<ReturnType<typeof api.topology>> | null>(null);
+  const [topoBusy, setTopoBusy] = useState(false);
   useEffect(() => {
     api.network().then(setNet).catch(() => {});
+    api.topology().then(setTopo).catch(() => {});
   }, []);
+  async function refreshTopo() {
+    setTopoBusy(true);
+    try {
+      await api.topologyRefresh();
+      const t = await api.topology();
+      setTopo(t);
+    } catch {
+    } finally {
+      setTopoBusy(false);
+    }
+  }
+  const direct = topo?.nodes.filter((n) => n.l2 === true).length ?? 0;
+  const routed = topo?.nodes.filter((n) => n.l2 === false).length ?? 0;
   const isDockerGw = net?.effectiveGateway?.startsWith("172.");
   return (
     <div>
@@ -43,6 +59,31 @@ export function Network() {
             <p className="mono">{net.effectiveGateway} — {net.gateway?.ip === net.effectiveGateway ? (net.gateway.reachable ? "Reachable" : "Unreachable") : "konfiguriert"} {net.gateway?.latencyMs != null ? `· ${net.gateway.latencyMs} ms` : ""}</p>
           ) : net.gateway?.ip ? <p className="mono">{net.gateway.ip} — {net.gateway.reachable ? "Reachable" : "Unreachable"}</p> : <Empty text="Gateway unavailable." />}
           <p className="muted" style={{ fontSize: 12 }}>Effektiv: {net.effectiveGateway ?? "nicht erkannt"} {net.gateway?.ip && net.gateway.ip !== net.effectiveGateway ? `· gemessen: ${net.gateway.ip}` : ""} · Subnetze: {net.subnets.join(", ") || "—"}</p>
+          <h2>Topologie
+            <button className="ghost" style={{ marginLeft: 8, fontSize: 12 }} onClick={() => void refreshTopo()} disabled={topoBusy}>
+              {topoBusy ? "Messe…" : "Neu vermessen"}
+            </button>
+          </h2>
+          {!topo || topo.nodes.length === 0 ? <Empty text="Noch keine Topologie-Daten — Scan starten oder neu vermessen." /> : (
+            <>
+              <p className="muted" style={{ fontSize: 12 }}>
+                {direct} direkt (L2) · {routed} geroutet · {topo.nodes.length - direct - routed} unbekannt
+                {topo.generatedAt ? ` · Stand: ${new Date(topo.generatedAt).toLocaleString()}` : ""}
+              </p>
+              <div className="tablewrap"><table>
+                <thead><tr><th>IP</th><th>Hops</th><th>Link</th><th>Interface</th><th>Subnetz</th></tr></thead>
+                <tbody>{topo.nodes.map((n) => (
+                  <tr key={n.id}>
+                    <td className="mono">{n.ip}</td>
+                    <td>{n.hops ?? "—"}</td>
+                    <td>{n.l2 === true ? "direkt (L2)" : n.l2 === false ? "geroutet" : "—"}</td>
+                    <td className="mono">{n.iface ?? "—"}</td>
+                    <td className="mono">{n.subnet ?? "—"}</td>
+                  </tr>
+                ))}</tbody>
+              </table></div>
+            </>
+          )}
           <h2>DNS test</h2>
           <div className="row">
             <input value={host} onChange={(e) => setHost(e.target.value)} aria-label="Hostname" />

@@ -46,7 +46,11 @@ export const api = {
   }>("/api/network"),
   interfaces: () => req<{ interfaces: import("@lanmap/shared").InterfaceInfo[]; subnets: string[]; gateway: string | null; effectiveGateway?: string | null }>("/api/interfaces"),
   scanState: () => req<{ scan: import("@lanmap/shared").ScanProgress }>("/api/scan"),
-  scanStart: (target: string) => req<{ ok: boolean; target: string }>(`/api/scan/start`, json({ target })),
+  scanStart: (target: string | string[]) =>
+    req<{ ok: boolean; target: string; targets?: string[] }>(
+      `/api/scan/start`,
+      json(Array.isArray(target) ? { targets: target } : { target }),
+    ),
   scanStop: () => req<{ scan: import("@lanmap/shared").ScanProgress }>(`/api/scan/stop`, { method: "POST" }),
   alerts: () => req<{ alerts: import("@lanmap/shared").Alert[] }>("/api/alerts"),
   ackAlert: (id: number) => req<{ ok: boolean }>(`/api/alerts/${id}/ack`, { method: "POST" }),
@@ -61,6 +65,18 @@ export const api = {
     }),
   dnsTest: (host: string) => req<{ ok: boolean; ms: number; addresses: string[] }>("/api/dns-test", json({ host })),
   health: () => req<Record<string, unknown>>("/api/health"),
+  topology: () => req<import("@lanmap/shared").Topology & { subnets: string[] }>("/api/topology"),
+  topologyRefresh: () => req<{ devices: number; withHops: number; direct: number; skipped: boolean }>("/api/topology/refresh", { method: "POST" }),
+  notifyStatus: () => req<{
+    ntfy: { enabled: boolean; server: string; topic: string; minSeverity: string };
+    webpush: { enabled: boolean; minSeverity: string; subscriptions: number };
+  }>("/api/notify/status"),
+  notifyTest: (channel: "ntfy" | "webpush") => req<{ ok: boolean }>(`/api/notify/test`, json({ channel })),
+  vapidKey: () => req<{ publicKey: string }>("/api/push/vapid"),
+  pushSubscribe: (sub: { endpoint: string; keys: { p256dh: string; auth: string } }) =>
+    req<{ ok: boolean }>(`/api/push/subscribe`, json(sub)),
+  pushUnsubscribe: (endpoint: string) =>
+    req<{ ok: boolean }>(`/api/push/unsubscribe`, { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ endpoint }) }),
 };
 
 export function exportUrl(format: "csv" | "json"): string {

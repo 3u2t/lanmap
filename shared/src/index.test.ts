@@ -8,7 +8,10 @@ import {
   normalizeMac,
   packetLossPct,
   parseCidr,
+  passesSeverity,
   sameDevice,
+  severityRank,
+  subnetOf,
   summarizeLatencies,
 } from "./index";
 
@@ -121,5 +124,25 @@ describe("categories", () => {
   it("has expected builtins", () => {
     expect(BUILTIN_CATEGORIES).toContain("Raspberry Pi");
     expect(BUILTIN_CATEGORIES).toContain("Network");
+  });
+});
+
+describe("severity", () => {
+  it("ranks info < warning < critical", () => {
+    expect(severityRank("info")).toBe(1);
+    expect(severityRank("warning")).toBe(2);
+    expect(severityRank("critical")).toBe(3);
+    expect(passesSeverity("info", "warning")).toBe(false);
+    expect(passesSeverity("warning", "warning")).toBe(true);
+    expect(passesSeverity("critical", "info")).toBe(true);
+  });
+});
+
+describe("subnetOf", () => {
+  it("matches ip to configured subnet", () => {
+    expect(subnetOf("192.168.178.23", ["192.168.178.0/24", "10.0.0.0/24"])).toBe("192.168.178.0/24");
+    expect(subnetOf("10.0.0.5", ["192.168.178.0/24", "10.0.0.0/24"])).toBe("10.0.0.0/24");
+    expect(subnetOf("8.8.8.8", ["192.168.178.0/24"])).toBeNull();
+    expect(subnetOf("not-an-ip", ["192.168.178.0/24"])).toBeNull();
   });
 });

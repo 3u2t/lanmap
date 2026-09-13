@@ -124,6 +124,8 @@ export function DeviceDetail() {
               <dt>Vendor</dt><dd>{d.vendor ?? <span className="dim">Unbekannt</span>}</dd>
               <dt>Interface</dt><dd>{d.iface ?? <span className="dim">—</span>}</dd>
               <dt>IPv6</dt><dd><span className="mono">{(d as unknown as { ipv6: string | null }).ipv6 ?? "—"}</span></dd>
+              <dt>Quelle</dt><dd>{d.source ?? "—"}{d.openPorts && d.openPorts.length > 0 ? <span className="mono"> · Ports {d.openPorts.join(", ")}</span> : ""}</dd>
+              <dt>Link</dt><dd>{d.l2 === true ? "direkt (L2)" : d.l2 === false ? `geroutet${typeof d.hops === "number" ? ` · ${d.hops} Hops` : ""}` : "—"}</dd>
             </dl>
             <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--border)" }}>
               <div style={{ fontSize: 12, fontWeight: 650, marginBottom: 8 }}>Anpassen</div>

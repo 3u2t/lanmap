@@ -82,8 +82,12 @@ CREATE TABLE IF NOT EXISTS internet (
   dns_ok INTEGER NOT NULL DEFAULT 0,
   latency_ms REAL
 );
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+  endpoint TEXT PRIMARY KEY,
+  keys TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
 `;
-
 export function dataDir(): string {
   if (process.env.DATA_DIR) return process.env.DATA_DIR;
   if (process.platform === "win32") {
@@ -99,6 +103,7 @@ export function initDb(): DatabaseSync {
   db = new DatabaseSync(join(dataDir(), "lanmap.db"));
   db.exec("PRAGMA journal_mode = WAL;");
   db.exec(SCHEMA);
+  migrate(db);
   const now = Date.now();
   const gw = db.prepare("SELECT id FROM gateway WHERE id = 1").get();
   if (!gw) db.prepare("INSERT INTO gateway (id, ts, ip, reachable) VALUES (1, ?, NULL, 0)").run(now);
@@ -111,6 +116,19 @@ export function initDb(): DatabaseSync {
 export function getDb(): DatabaseSync {
   if (!db) return initDb();
   return db;
+}
+
+function migrate(d: DatabaseSync): void {
+  const cols = new Set(
+    (d.prepare("PRAGMA table_info(devices)").all() as { name: string }[]).map((c) => c.name),
+  );
+  const add = (name: string, ddl: string) => {
+    if (!cols.has(name)) d.exec(`ALTER TABLE devices ADD COLUMN ${ddl}`);
+  };
+  add("source", "source TEXT");
+  add("open_ports", "open_ports TEXT");
+  add("hops", "hops INTEGER");
+  add("l2", "l2 INTEGER");
 }
 
 export function getSetting(key: string, fallback: string): string {

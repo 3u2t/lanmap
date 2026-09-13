@@ -3,7 +3,7 @@ import { api } from "../lib/api";
 import type { ScanProgress } from "@lanmap/shared";
 
 export function Scan() {
-  const [target, setTarget] = useState("192.168.178.0/24");
+  const [targets, setTargets] = useState<string[]>(["192.168.178.0/24"]);
   const [scan, setScan] = useState<ScanProgress>({ state: "idle", at: 0 } as unknown as ScanProgress);
   const [err, setErr] = useState<string | null>(null);
   const [subnets, setSubnets] = useState<string[]>([]);
@@ -12,11 +12,11 @@ export function Scan() {
     api.network().then((n) => {
       if (n.subnets?.length) {
         setSubnets(n.subnets);
-        if (n.subnets[0]) setTarget(n.subnets[0]);
+        setTargets(n.subnets);
       } else if ((n as unknown as { effectiveGateway: string }).effectiveGateway) {
         const gw = (n as unknown as { effectiveGateway: string }).effectiveGateway;
         const base = gw.split(".").slice(0, 3).join(".") + ".0/24";
-        setTarget(base);
+        setTargets([base]);
       }
     }).catch(() => {});
     api.scanState().then((r) => setScan(r.scan)).catch(() => {});
@@ -32,12 +32,21 @@ export function Scan() {
 
   async function start() {
     setErr(null);
+    const clean = targets.map((t) => t.trim()).filter(Boolean);
+    if (clean.length === 0) {
+      setErr("Mindestens ein Subnetz angeben.");
+      return;
+    }
     try {
-      const r = await api.scanStart(target);
+      const r = await api.scanStart(clean);
       setScan({ state: "running", target: r.target } as ScanProgress);
     } catch (e) {
       setErr((e as Error).message);
     }
+  }
+
+  function setTargetAt(i: number, v: string) {
+    setTargets((ts) => ts.map((t, j) => (j === i ? v : t)));
   }
 
   const pct = scan.total ? Math.round(((scan.done ?? 0) / scan.total) * 100) : 0;
@@ -50,10 +59,26 @@ export function Scan() {
       <div className="panel" style={{ marginBottom: 12 }}>
         <div className="panel-body">
           <div style={{ fontSize: 13, color: "var(--text2)", marginBottom: 10 }}>
-            Durchsucht dein lokales Netz via Ping-Sweep (max 1024 Hosts, ~32 parallel). ARP-Tabelle und Reverse-DNS werden automatisch ergänzt. Nur private Ranges erlaubt.
+            Durchsucht deine lokalen Netze (Ping-Sweep max 1024 Hosts pro Subnetz, ~32 parallel). ARP-Tabelle, Reverse-DNS, SSDP, mDNS und TCP-Fallback ergänzen automatisch — je nach aktivierten Methoden unter Settings → Discovery. Nur private Ranges erlaubt, mehrere Subnetze werden nacheinander gescannt.
           </div>
+          {targets.map((t, i) => (
+            <div className="row" style={{ gap: 8, marginBottom: 6 }} key={i}>
+              <input
+                value={t}
+                onChange={(e) => setTargetAt(i, e.target.value)}
+                aria-label={`Subnet ${i + 1}`}
+                className="mono"
+                style={{ flex: 1, minWidth: 200 }}
+                placeholder="192.168.178.0/24"
+              />
+              {targets.length > 1 && (
+                <button onClick={() => setTargets((ts) => ts.filter((_, j) => j !== i))} aria-label="Entfernen">−</button>
+              )}
+            </div>
+          ))}
           <div className="row" style={{ gap: 8 }}>
-            <input value={target} onChange={(e) => setTarget(e.target.value)} aria-label="Subnet" className="mono" style={{ flex: 1, minWidth: 200 }} placeholder="192.168.178.0/24" />
+            <button onClick={() => setTargets((ts) => [...ts, ""])}>+ Subnetz</button>
+            <span style={{ flex: 1 }} />
             <button className="primary" onClick={() => void start()} disabled={scan.state === "running"}>Start</button>
             <button onClick={() => api.scanStop().then((r) => setScan(r.scan)).catch(() => {})} disabled={scan.state !== "running"}>Stop</button>
           </div>
@@ -61,7 +86,7 @@ export function Scan() {
             <div style={{ marginTop: 8, display: "flex", gap: 6, flexWrap: "wrap" }}>
               <span className="muted" style={{ fontSize: 11, alignSelf: "center" }}>Vorschläge:</span>
               {subnets.map((s) => (
-                <button key={s} className="pill" onClick={() => setTarget(s)} style={{ fontSize: 11 }}>{s}</button>
+                <button key={s} className="pill" onClick={() => setTargets((ts) => (ts.includes(s) ? ts : [...ts, s]))} style={{ fontSize: 11 }}>{s}</button>
               ))}
             </div>
           )}
@@ -72,7 +97,7 @@ export function Scan() {
       <div className="panel">
         <div className="panel-head"><strong>Status</strong><span className={`badge ${scan.state === "running" ? "warn" : scan.state === "done" ? "ok" : ""}`}>{scan.state}</span></div>
         <div className="panel-body">
-          {scan.state === "idle" && <p className="muted" style={{ margin: 0 }}>Bereit — wähle ein Subnetz und starte.</p>}
+          {scan.state === "idle" && <p className="muted" style={{ margin: 0 }}>Bereit — wähle Subnetze und starte.</p>}
           {scan.state === "running" && (
             <>
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 6 }}>
@@ -96,7 +121,7 @@ export function Scan() {
       </div>
 
       <div className="muted" style={{ fontSize: 11.5, marginTop: 10 }}>
-        Tipp: Im Docker-Bridge-Modus zeigt die Auto-Erkennung nur `172.x`. Trage oben `192.168.178.0/24` ein oder setze `LAN_SUBNET` in der `.env`.
+        Tipp: Im Docker-Bridge-Modus zeigt die Auto-Erkennung nur `172.x`. Trage oben `192.168.178.0/24` ein oder setze `LAN_SUBNET` in der `.env`. Nach dem Scan wird die Topologie (Hops, direkt/geroutet) automatisch aktualisiert.
       </div>
     </div>
   );

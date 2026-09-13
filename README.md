@@ -6,12 +6,14 @@ I run a Raspberry Pi at home and could never remember what was on my LAN — the
 
 ## Features
 
-- **Discovery** — ARP / neighbour table + ping sweep + reverse DNS. Each method is optional and one failing doesn't stop the others.
+- **Discovery** — ARP / neighbour table + ping sweep + reverse DNS + mDNS + SSDP/UPnP + TCP-connect fallback. Each method is optional and one failing doesn't stop the others.
 - **Presence tracking** — 3-strike rule, so a single dropped ping doesn't flap a device online/offline.
 - **Monitoring** — latency + packet loss for monitored devices, ticking every 10s, with 1h–30d history and uPlot charts.
-- **Network map** — logical star/grid view grouped by subnet. It does not know your physical topology and says so.
+- **Network map** — groups by subnet, interface or category. TTL-based hop estimation and ARP adjacency mark devices as direct (L2, solid line) or routed (dashed).
+- **Multi-network** — scan up to 8 private subnets in one run; the map groups devices per configured network.
 - **Gateway + internet checks** — ICMP gateway ping plus DNS resolution test.
 - **Alerts** — offline/online, new device, high latency, packet loss, gateway/internet down, IP/hostname changes.
+- **Push notifications** — ntfy and browser Web Push (VAPID) with per-channel severity gate and test buttons.
 - **Live UI** — WebSocket updates with polling fallback, `Ctrl+K` command palette, dark/light theme, CSV/JSON export.
 - **Auth** — single admin account created on first run, cookie sessions, rate-limited login.
 - **Demo mode** — `DEMO_MODE=true` seeds simulated devices, clearly bannered.
@@ -81,6 +83,15 @@ go build -o lanmap.exe ./windows/launcher.go
 npm run build:win
 ```
 
+## Notifications
+
+Two channels, both configured under Settings → Notifications and gated per severity (info/warning/critical):
+
+- **ntfy** — set server (default `https://ntfy.sh`, self-hosted works too) and topic, subscribe the topic in the ntfy app, hit Test.
+- **Web Push** — enable, then register the browser (VAPID keys are generated automatically). Works for phones/desktops even with the tab closed, via the bundled service worker.
+
+Only fresh alerts push — deduped repeats inside the 15-minute window stay quiet.
+
 ## Configuration
 
 | Var | Default | What |
@@ -124,10 +135,12 @@ Full reference in `docs/api.md`. WebSocket on `/ws`: `device-updated`, `scan-pro
 ## Roadmap
 
 - [x] Discovery, monitoring, latency, packet loss, history, alerts, map, CasaOS files
-- [ ] Better topology detection
-- [ ] More discovery methods
-- [ ] Push notifications
-- [ ] Multi-network support
+- [x] Better topology detection (TTL hops, L2 adjacency, interface grouping)
+- [x] More discovery methods (mDNS, SSDP/UPnP, TCP-connect fallback)
+- [x] Push notifications (ntfy + Web Push/VAPID)
+- [x] Multi-network support (up to 8 subnets per scan)
+- [ ] Push notifications for more channels
+- [ ] Multi-user support
 
 ## License
 
