@@ -1,0 +1,32 @@
+services:
+  lanmap:
+    build: .
+    image: lanmap:latest
+    # For correct gateway/MAC in Docker bridge mode: either set ENV below
+    # or enable network_mode: host (container then sees 192.168.178.1 directly).
+    # network_mode: host
+    ports:
+      - "8081:8081"
+    volumes:
+      - lanmap-data:/data
+      # optional: expose host routing table for correct gateway detection without host mode
+      # - /proc/net/route:/host_proc/net/route:ro
+    env_file:
+      - .env
+    environment:
+      - PORT=8081
+      - DATA_DIR=/data
+      # override auto-detection (useful when staying in bridge mode):
+      # - GATEWAY_IP=192.168.178.1
+      # - LAN_SUBNET=192.168.178.0/24
+    cap_add:
+      - NET_RAW
+    restart: unless-stopped
+    x-casaos:
+      name: LANMap
+      tagline: "See what's on your network."
+      port: 8081
+      volume: /DATA/AppData/lanmap:/data
+
+volumes:
+  lanmap-data:

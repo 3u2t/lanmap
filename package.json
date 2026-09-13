@@ -1,0 +1,21 @@
+{
+  "name": "lanmap",
+  "version": "0.1.0",
+  "private": true,
+  "description": "See what's on your network.",
+  "workspaces": [
+    "shared",
+    "backend",
+    "frontend"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces",
+    "build:win": "node scripts/build-windows.mjs",
+    "build:win:launcher": "go build -o dist/lanmap.exe ./windows/launcher.go",
+    "test": "npm run test --workspaces",
+    "typecheck": "npm run typecheck --workspaces"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
