@@ -5,7 +5,9 @@ COPY package.json package-lock.json* ./
 COPY shared/package.json shared/
 COPY backend/package.json backend/
 COPY frontend/package.json frontend/
-RUN npm install --no-audit --no-fund
+# --ignore-scripts: root postinstall builds @lanmap/shared, whose sources
+# are only copied in the next step. The explicit build below covers it.
+RUN npm install --no-audit --no-fund --ignore-scripts
 COPY shared/ shared/
 COPY backend/ backend/
 COPY frontend/ frontend/
