@@ -8,6 +8,7 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
       - run: npm install --no-audit --no-fund
+      - run: npm run build -w @lanmap/shared
       - run: npm run typecheck -w lanmap-backend
       - run: npm run test -w lanmap-backend
       - run: npm run build -w lanmap-backend
@@ -18,6 +19,7 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
       - run: npm install --no-audit --no-fund
+      - run: npm run build -w @lanmap/shared
       - run: npm run typecheck -w lanmap-frontend
       - run: npm run test -w lanmap-frontend
       - run: npm run build -w lanmap-frontend
@@ -54,6 +56,7 @@ jobs:
       - uses: actions/setup-go@v5
         with: { go-version: "1.22" }
       - run: npm install --no-audit --no-fund
+      - run: npm run build -w @lanmap/shared
       - run: npm run typecheck --workspaces
       - run: npm run test --workspaces
       - run: npm run build --workspaces

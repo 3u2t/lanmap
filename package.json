@@ -9,9 +9,10 @@
     "frontend"
   ],
   "scripts": {
-    "build": "npm run build --workspaces",
+    "build": "npm run build -w @lanmap/shared && npm run build -w lanmap-backend && npm run build -w lanmap-frontend",
     "build:win": "node scripts/build-windows.mjs",
     "build:win:launcher": "go build -o dist/lanmap.exe ./windows/launcher.go",
+    "postinstall": "npm run build -w @lanmap/shared",
     "test": "npm run test --workspaces",
     "typecheck": "npm run typecheck --workspaces"
   },
