@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0 (unreleased)
+## 0.2.0 (2026-09-13)
 
 - Topology: TTL hop estimation + ARP adjacency (direct L2 vs routed), auto-refresh after scans, map badges/line styles, interface grouping, Network → Topology table
 - Discovery: SSDP/UPnP browse, mDNS browse, TCP-connect fallback for ping-blocked hosts; per-method toggles
