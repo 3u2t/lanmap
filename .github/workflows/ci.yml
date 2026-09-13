@@ -45,6 +45,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - run: cp .env.example .env
       - run: docker compose config
       - run: python3 -c "import yaml; d=yaml.safe_load(open('docker-compose.yml')); s=d['services']['lanmap']; assert s['x-casaos']['port']==8081, 'casaos port'; print('casaos metadata ok')"
   windows-exe:
